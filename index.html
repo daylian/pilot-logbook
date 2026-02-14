@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="Pilot Logbook">
+    <title>Pilot Logbook</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        input, select, textarea { font-size: 16px !important; }
+        .app-container { min-height: 100vh; padding-bottom: env(safe-area-inset-bottom); }
+        .autocomplete-item { padding: 8px 12px; cursor: pointer; border-bottom: 1px solid #e5e7eb; }
+        .autocomplete-item:hover { background: #f3f4f6; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        const Plane = () => (<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"/></svg>);
+        const Save = () => (<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>);
+        const Download = () => (<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>);
+        const Settings = () => (<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v6m0 6v6m5.196-13.196L15.54 7.46m-7.08 7.08-1.656 1.656M23 12h-6m-6 0H5m13.196 5.196-1.656-1.656m-7.08-7.08L7.804 6.804"/></svg>);
+        const Printer = () => (<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>);
+
+        function PilotLogbook() {
+            const [flights, setFlights] = useState([]);
+            const [crewMembers, setCrewMembers] = useState([]);
+            const [currentFlight, setCurrentFlight] = useState({
+                date: new Date().toISOString().split('T')[0], aircraft: '', tailNumber: '', from: '', to: '', out: '', off: '', on: '', in: '', blockTime: '', flightTime: '', totalTime: '', pic: '', sic: '', night: '', day: '', instrument: '', dayLandings: 0, nightLandings: 0, approaches: 0, crewMember: '', role: 'First Officer', remarks: ''
+            });
+            const [showSettings, setShowSettings] = useState(false);
+            const [useLocalTime, setUseLocalTime] = useState(false);
+            const [showAutocomplete, setShowAutocomplete] = useState(false);
+            const [filteredCrewMembers, setFilteredCrewMembers] = useState([]);
+            const autocompleteRef = useRef(null);
+
+            useEffect(() => {
+                const saved = localStorage.getItem('pilotLogFlights');
+                const savedCrew = localStorage.getItem('pilotLogCrewMembers');
+                if (saved) setFlights(JSON.parse(saved));
+                if (savedCrew) setCrewMembers(JSON.parse(savedCrew));
+            }, []);
+
+            useEffect(() => { localStorage.setItem('pilotLogFlights', JSON.stringify(flights)); }, [flights]);
+            useEffect(() => { localStorage.setItem('pilotLogCrewMembers', JSON.stringify(crewMembers)); }, [crewMembers]);
+
+            useEffect(() => {
+                const handleClickOutside = (event) => {
+                    if (autocompleteRef.current && !autocompleteRef.current.contains(event.target)) {
+                        setShowAutocomplete(false);
+                    }
+                };
+                document.addEventListener('mousedown', handleClickOutside);
+                return () => document.removeEventListener('mousedown', handleClickOutside);
+            }, []);
+
+            const calculateTimeDiff = (start, end) => {
+                if (!start || !end) return '';
+                const s = new Date(`2000-01-01T${start}${useLocalTime ? '' : 'Z'}`);
+                const e = new Date(`2000-01-01T${end}${useLocalTime ? '' : 'Z'}`);
+                let diff = (e - s) / 3600000;
+                if (diff < 0) diff += 24;
+                return diff.toFixed(1);
+            };
+
+            useEffect(() => {
+                if (currentFlight.out && currentFlight.in) {
+                    setCurrentFlight(p => ({ ...p, blockTime: calculateTimeDiff(p.out, p.in) }));
+                }
+                if (currentFlight.off && currentFlight.on) {
+                    const ft = calculateTimeDiff(currentFlight.off, currentFlight.on);
+                    setCurrentFlight(p => ({ ...p, flightTime: ft, totalTime: ft }));
+                }
+            }, [currentFlight.out, currentFlight.in, currentFlight.off, currentFlight.on, useLocalTime]);
+
+            const handleCrewMemberChange = (value) => {
+                setCurrentFlight({...currentFlight, crewMember: value});
+                if (value.length > 0) {
+                    const filtered = crewMembers.filter(member => 
+                        member.name.toLowerCase().includes(value.toLowerCase())
+                    );
+                    setFilteredCrewMembers(filtered);
+                    setShowAutocomplete(filtered.length > 0);
+                } else {
+                    setShowAutocomplete(false);
+                }
+            };
+
+            const selectCrewMember = (member) => {
+                setCurrentFlight({...currentFlight, crewMember: member.name, role: member.role});
+                setShowAutocomplete(false);
+            };
+
+            const addFlight = () => {
+                if (!currentFlight.date || !currentFlight.aircraft) { alert('Need Date and Aircraft'); return; }
+                
+                if (currentFlight.crewMember && !crewMembers.find(m => m.name === currentFlight.crewMember)) {
+                    setCrewMembers([...crewMembers, { name: currentFlight.crewMember, role: currentFlight.role }]);
+                }
+
+                setFlights([{ ...currentFlight, id: Date.now(), timeZone: useLocalTime ? 'Local' : 'UTC' }, ...flights]);
+                setCurrentFlight({ date: new Date().toISOString().split('T')[0], aircraft: '', tailNumber: '', from: '', to: '', out: '', off: '', on: '', in: '', blockTime: '', flightTime: '', totalTime: '', pic: '', sic: '', night: '', day: '', instrument: '', dayLandings: 0, nightLandings: 0, approaches: 0, crewMember: '', role: 'First Officer', remarks: '' });
+                alert('Flight logged!');
+            };
+
+            const totals = flights.reduce((a, f) => {
+                a.totalTime += parseFloat(f.totalTime || 0);
+                a.pic += parseFloat(f.pic || 0);
+                a.sic += parseFloat(f.sic || 0);
+                a.day += parseFloat(f.day || 0);
+                a.night += parseFloat(f.night || 0);
+                a.instrument += parseFloat(f.instrument || 0);
+                a.dayLandings += parseInt(f.dayLandings || 0);
+                a.nightLandings += parseInt(f.nightLandings || 0);
+                return a;
+            }, { totalTime: 0, pic: 0, sic: 0, day: 0, night: 0, instrument: 0, dayLandings: 0, nightLandings: 0 });
+
+            const exportToCSV = () => {
+                const headers = ['Date','Aircraft','Tail','From','To','OUT','OFF','ON','IN','Block','Flight','PIC','SIC','Day','Night','IFR','DayLdg','NightLdg','Appr','Crew','Role','Remarks'];
+                const rows = flights.map(f => [f.date,f.aircraft,f.tailNumber,f.from,f.to,f.out,f.off,f.on,f.in,f.blockTime,f.flightTime,f.pic,f.sic,f.day,f.night,f.instrument,f.dayLandings,f.nightLandings,f.approaches,f.crewMember,f.role,f.remarks]);
+                const csv = [headers, ...rows].map(r => r.join(',')).join('\n');
+                const blob = new Blob([csv], { type: 'text/csv' });
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `logbook-${new Date().toISOString().split('T')[0]}.csv`;
+                a.click();
+            };
+
+            const printLogbook = () => {
+                const printWindow = window.open('', '_blank');
+                const sortedFlights = [...flights].sort((a, b) => new Date(a.date) - new Date(b.date));
+                printWindow.document.write(`<!DOCTYPE html><html><head><title>Pilot Logbook</title><style>body{font-family:Arial,sans-serif;margin:20px}.print-header{text-align:center;margin-bottom:20px;font-size:18pt;font-weight:bold}.print-table{width:100%;border-collapse:collapse;font-size:7pt}.print-table th{background:#e0e0e0;border:1px solid black;padding:3px 2px;font-weight:bold;font-size:6pt;text-align:center}.print-table td{border:1px solid black;padding:2px 1px;font-size:7pt;text-align:center}.totals-row{background:#f5f5f5;font-weight:bold}</style></head><body><div class="print-header">PILOT LOGBOOK</div><table class="print-table"><thead><tr><th>Date</th><th>Aircraft</th><th>Tail#</th><th>From</th><th>To</th><th>OUT</th><th>OFF</th><th>ON</th><th>IN</th><th>Block</th><th>Flight</th><th>PIC</th><th>SIC</th><th>Day</th><th>Night</th><th>IFR</th><th>Day<br/>Ldg</th><th>Night<br/>Ldg</th><th>Appr</th><th>Crew</th><th>Role</th><th>Remarks</th></tr></thead><tbody>${sortedFlights.map(f => `<tr><td>${f.date}</td><td>${f.aircraft}</td><td>${f.tailNumber}</td><td>${f.from}</td><td>${f.to}</td><td>${f.out}</td><td>${f.off}</td><td>${f.on}</td><td>${f.in}</td><td>${f.blockTime}</td><td>${f.flightTime}</td><td>${f.pic}</td><td>${f.sic}</td><td>${f.day}</td><td>${f.night}</td><td>${f.instrument}</td><td>${f.dayLandings}</td><td>${f.nightLandings}</td><td>${f.approaches}</td><td>${f.crewMember}</td><td>${f.role}</td><td style="text-align:left">${f.remarks}</td></tr>`).join('')}<tr class="totals-row"><td colspan="9"><strong>TOTALS</strong></td><td><strong>${totals.totalTime.toFixed(1)}</strong></td><td></td><td><strong>${totals.pic.toFixed(1)}</strong></td><td><strong>${totals.sic.toFixed(1)}</strong></td><td><strong>${totals.day.toFixed(1)}</strong></td><td><strong>${totals.night.toFixed(1)}</strong></td><td><strong>${totals.instrument.toFixed(1)}</strong></td><td><strong>${totals.dayLandings}</strong></td><td><strong>${totals.nightLandings}</strong></td><td colspan="4"></td></tr></tbody></table></body></html>`);
+                printWindow.document.close();
+                setTimeout(() => printWindow.print(), 250);
+            };
+
+            return (
+                <div className="app-container min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4 pb-20">
+                    <div className="max-w-4xl mx-auto mb-6">
+                        <div className="bg-white rounded-lg shadow-lg p-6">
+                            <div className="flex items-center justify-between mb-4">
+                                <div className="flex items-center gap-3">
+                                    <Plane />
+                                    <h1 className="text-2xl font-bold text-gray-800">Pilot Logbook</h1>
+                                </div>
+                                <button onClick={() => setShowSettings(!showSettings)} className="p-2 hover:bg-gray-100 rounded-lg">
+                                    <Settings />
+                                </button>
+                            </div>
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4 p-4 bg-blue-50 rounded-lg">
+                                <div><div className="text-sm text-gray-600">Total Time</div><div className="text-2xl font-bold text-blue-600">{totals.totalTime.toFixed(1)}</div></div>
+                                <div><div className="text-sm text-gray-600">PIC</div><div className="text-2xl font-bold text-blue-600">{totals.pic.toFixed(1)}</div></div>
+                                <div><div className="text-sm text-gray-600">Day/Night</div><div className="text-2xl font-bold text-blue-600">{totals.day.toFixed(1)}/{totals.night.toFixed(1)}</div></div>
+                                <div><div className="text-sm text-gray-600">Landings</div><div className="text-2xl font-bold text-blue-600">{totals.dayLandings + totals.nightLandings}</div></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {showSettings && (
+                        <div className="max-w-4xl mx-auto mb-6">
+                            <div className="bg-white rounded-lg shadow-lg p-6">
+                                <h2 className="text-xl font-bold mb-4">Settings</h2>
+                                <div className="space-y-4">
+                                    <div className="flex items-center gap-3 p-4 bg-blue-50 rounded-lg">
+                                        <input 
+                                            type="checkbox" 
+                                            id="localTime"
+                                            checked={useLocalTime}
+                                            onChange={(e) => setUseLocalTime(e.target.checked)}
+                                            className="w-5 h-5 text-blue-600"
+                                        />
+                                        <label htmlFor="localTime" className="text-sm font-medium text-gray-700">
+                                            Use Local Time (instead of UTC)
+                                        </label>
+                                    </div>
+                                    <div className="p-4 bg-gray-50 rounded-lg">
+                                        <p className="text-sm text-gray-700 mb-2"><strong>Saved Crew Members:</strong></p>
+                                        <div className="space-y-1">
+                                            {crewMembers.length === 0 ? (
+                                                <p className="text-xs text-gray-500">No crew members saved yet</p>
+                                            ) : (
+                                                crewMembers.map((member, i) => (
+                                                    <div key={i} className="text-sm text-gray-600">
+                                                        {member.name} - {member.role}
+                                                    </div>
+                                                ))
+                                            )}
+                                        </div>
+                                    </div>
+                                    <button onClick={() => setShowSettings(false)} className="px-4 py-2 bg-blue-600 text-white rounded-lg">Close</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="max-w-4xl mx-auto mb-6">
+                        <div className="bg-white rounded-lg shadow-lg p-6">
+                            <h2 className="text-xl font-bold mb-4">Log Flight</h2>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div><label className="block text-sm font-medium mb-1">Date</label><input type="date" value={currentFlight.date} onChange={(e) => setCurrentFlight({...currentFlight, date: e.target.value})} className="w-full px-3 py-2 border rounded-lg" /></div>
+                                <div><label className="block text-sm font-medium mb-1">Aircraft</label><input type="text" value={currentFlight.aircraft} onChange={(e) => setCurrentFlight({...currentFlight, aircraft: e.target.value})} placeholder="B737" className="w-full px-3 py-2 border rounded-lg" /></div>
+                                <div><label className="block text-sm font-medium mb-1">Tail#</label><input type="text" value={currentFlight.tailNumber} onChange={(e) => setCurrentFlight({...currentFlight, tailNumber: e.target.value})} placeholder="N12345" className="w-full px-3 py-2 border rounded-lg" /></div>
+                                <div><label className="block text-sm font-medium mb-1">From</label><input type="text" value={currentFlight.from} onChange={(e) => setCurrentFlight({...currentFlight, from: e.target.value.toUpperCase()})} placeholder="KJFK" maxLength="4" className="w-full px-3 py-2 border rounded-lg" /></div>
+                                <div><label className="block text-sm font-medium mb-1">To</label><input type="text" value={currentFlight.to} onChange={(e) => setCurrentFlight({...currentFlight, to: e.target.value.toUpperCase()})} placeholder="KLAX" maxLength="4" className="w-full px-3 py-2 border rounded-lg" /></div>
+                                
+                                <div className="relative" ref={autocompleteRef}>
+                                    <label className="block text-sm font-medium mb-1">Crew Member</label>
+                                    <input 
+                                        type="text" 
+                                        value={currentFlight.crewMember} 
+                                        onChange={(e) => handleCrewMemberChange(e.target.value)}
+                                        placeholder="Enter name" 
+                                        className="w-full px-3 py-2 border rounded-lg" 
+                                    />
+                                    {showAutocomplete && (
+                                        <div className="absolute z-10 w-full bg-white border border-gray-300 rounded-lg shadow-lg mt-1">
+                                            {filteredCrewMembers.map((member, i) => (
+                                                <div 
+                                                    key={i}
+                                                    onClick={() => selectCrewMember(member)}
+                                                    className="autocomplete-item"
+                                                >
+                                                    {member.name} - {member.role}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-medium mb-1">Role</label>
+                                    <select 
+                                        value={currentFlight.role} 
+                                        onChange={(e) => setCurrentFlight({...currentFlight, role: e.target.value})}
+                                        className="w-full px-3 py-2 border rounded-lg"
+                                    >
+                                        <option value="Captain">Captain</option>
+                                        <option value="First Officer">First Officer</option>
+                                        <option value="Passenger">Passenger</option>
+                                    </select>
+                                </div>
+
+                                <div><label className="block text-sm font-medium mb-1">OUT ({useLocalTime ? 'Local' : 'UTC'})</label><input type="time" value={currentFlight.out} onChange={(e) => setCurrentFlight({...currentFlight, out: e.target.value})} className="w-full px-3 py-2 border rounded-lg" /></div>
+                                <div><label className="block text-sm font-medium mb-1">OFF ({useLocalTime ? 'Local' : 'UTC'})</label><input type="time" value={currentFlight.off} onChange={(e) => setCurrentFlight({...currentFlight, off: e.target.value})} className="w-full px-3 py-2 border rounded-lg" /></div>
+                                <div><label className="block text-sm font-medium mb-1">ON ({useLocalTime ? 'Local' : 'UTC'})</label><input type="time" value={currentFlight.on} onChange={(e) => setCurrentFlight({...currentFlight, on: e.target.value})} className="w-full px-3 py-2 border rounded-lg" /></div>
+                                <div><label className="block text-sm font-medium mb-1">IN ({useLocalTime ? 'Local' : 'UTC'})</label><input type="time" value={currentFlight.in} onChange={(e) => setCurrentFlight({...currentFlight, in: e.target.value})} className="w-full px-3 py-2 border rounded-lg" /></div>
+                                <div><label className="block text-sm font-medium mb-1">Block Time</label><input type="number" step="0.1" value={currentFlight.blockTime} readOnly className="w-full px-3 py-2 border rounded-lg bg-gray-100" /></div>
+                                <div><label className="block text-sm font-medium mb-1">Flight Time</label><input type="number" step="0.1" value={currentFlight.flightTime} readOnly className="w-full px-3 py-2 border rounded-lg bg-gray-100" /></div>
+                                <div><label className="block text-sm font-medium mb-1">Day (hrs)</label><input type="number" step="0.1" value={currentFlight.day} onChange={(e) => setCurrentFlight({...currentFlight, day: e.target.value})} className="w-full px-3 py-2 border rounded-lg" /></div>
+                                <div><label className="block text-sm font-medium mb-1">Night (hrs)</label><input type="number" step="0.1" value={currentFlight.night} onChange={(e) => setCurrentFlight({...currentFlight, night: e.target.value})} className="w-full px-3 py-2 border rounded-lg" /></div>
+                                <div><label className="block text-sm font-medium mb-1">PIC (hrs)</label><input type="number" step="0.1" value={currentFlight.pic} onChange={(e) => setCurrentFlight({...currentFlight, pic: e.target.value})} className="w-full px-3 py-2 border rounded-lg" /></div>
+                                <div><label className="block text-sm font-medium mb-1">SIC (hrs)</label><input type="number" step="0.1" value={currentFlight.sic} onChange={(e) => setCurrentFlight({...currentFlight, sic: e.target.value})} className="w-full px-3 py-2 border rounded-lg" /></div>
+                                <div><label className="block text-sm font-medium mb-1">Instrument</label><input type="number" step="0.1" value={currentFlight.instrument} onChange={(e) => setCurrentFlight({...currentFlight, instrument: e.target.value})} className="w-full px-3 py-2 border rounded-lg" /></div>
+                                <div><label className="block text-sm font-medium mb-1">Day Landings</label><input type="number" value={currentFlight.dayLandings} onChange={(e) => setCurrentFlight({...currentFlight, dayLandings: e.target.value})} className="w-full px-3 py-2 border rounded-lg" /></div>
+                                <div><label className="block text-sm font-medium mb-1">Night Landings</label><input type="number" value={currentFlight.nightLandings} onChange={(e) => setCurrentFlight({...currentFlight, nightLandings: e.target.value})} className="w-full px-3 py-2 border rounded-lg" /></div>
+                                <div><label className="block text-sm font-medium mb-1">Approaches</label><input type="number" value={currentFlight.approaches} onChange={(e) => setCurrentFlight({...currentFlight, approaches: e.target.value})} className="w-full px-3 py-2 border rounded-lg" /></div>
+                                <div className="md:col-span-2"><label className="block text-sm font-medium mb-1">Remarks</label><input type="text" value={currentFlight.remarks} onChange={(e) => setCurrentFlight({...currentFlight, remarks: e.target.value})} placeholder="Training, checkride, etc." className="w-full px-3 py-2 border rounded-lg" /></div>
+                            </div>
+                            <button onClick={addFlight} className="mt-4 w-full flex items-center justify-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-lg font-medium">
+                                <Save />Log Flight
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="max-w-4xl mx-auto">
+                        <div className="bg-white rounded-lg shadow-lg p-6">
+                            <div className="flex items-center justify-between mb-4">
+                                <h2 className="text-xl font-bold">History ({flights.length})</h2>
+                                <div className="flex gap-2">
+                                    <button onClick={printLogbook} disabled={flights.length === 0} className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg text-sm disabled:bg-gray-300">
+                                        <Printer />Print
+                                    </button>
+                                    <button onClick={exportToCSV} disabled={flights.length === 0} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm disabled:bg-gray-300">
+                                        <Download />CSV
+                                    </button>
+                                </div>
+                            </div>
+                            {flights.length === 0 ? (
+                                <p className="text-gray-500 text-center py-8">No flights logged yet</p>
+                            ) : (
+                                <div className="space-y-2">
+                                    {flights.map((f) => (
+                                        <div key={f.id} className="p-4 bg-gray-50 rounded-lg border hover:border-blue-300">
+                                            <div className="font-medium text-lg">{f.date} - {f.aircraft} {f.tailNumber}</div>
+                                            <div className="text-gray-600 mt-1">{f.from} → {f.to}</div>
+                                            {f.crewMember && <div className="text-sm text-blue-600 mt-1">Crew: {f.crewMember} ({f.role})</div>}
+                                            <div className="text-sm text-gray-500 mt-1">OUT: {f.out} | OFF: {f.off} | ON: {f.on} | IN: {f.in} {f.timeZone && `(${f.timeZone})`}</div>
+                                            <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mt-2 text-sm">
+                                                <div><span className="text-gray-500">Block:</span> {f.blockTime}h</div>
+                                                <div><span className="text-gray-500">Flight:</span> {f.flightTime}h</div>
+                                                <div><span className="text-gray-500">PIC:</span> {f.pic}h</div>
+                                                <div><span className="text-gray-500">Day/Night:</span> {f.day}/{f.night}h</div>
+                                                <div><span className="text-gray-500">Ldg:</span> {f.dayLandings}/{f.nightLandings}</div>
+                                            </div>
+                                            {f.remarks && <div className="mt-2 text-sm text-gray-600 italic">{f.remarks}</div>}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<PilotLogbook />);
+    </script>
+</body>
+</html>
