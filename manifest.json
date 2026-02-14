@@ -2,7 +2,7 @@
   "name": "Pilot Logbook",
   "short_name": "Logbook",
   "description": "Professional pilot flight logbook with offline support",
-  "start_url": "/",
+  "start_url": "./",
   "display": "standalone",
   "background_color": "#DBEAFE",
   "theme_color": "#2563EB",
