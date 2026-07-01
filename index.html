@@ -162,7 +162,7 @@
 
     // --- Photo capture helpers (grayscale + threshold + crop, all client-side) ---
     const GUIDE_BOXES = {
-        registration: { xPct: 0.08, yPct: 0.32, wPct: 0.84, hPct: 0.16 },
+        registration: { xPct: 0.05, yPct: 0.25, wPct: 0.90, hPct: 0.45 },
         fms:          { xPct: 0.05, yPct: 0.20, wPct: 0.90, hPct: 0.60 }
     };
 
@@ -467,7 +467,7 @@
 
             if (captureStep === 'registration') {
                 const cropped = cropCanvasFromVideo(videoRef.current, GUIDE_BOXES.registration);
-                preprocessCanvas(cropped, 150);
+                preprocessCanvas(cropped, 128);
                 setCapturedRegCanvas(cropped);
                 setCaptureStep('fms');
                 return;
@@ -494,7 +494,7 @@
                 const regText = regOcr.data.text || '';
                 const fmsText = fmsOcr.data.text || '';
 
-                const regMatch = regText.match(/[A-Z]-[A-Z]{4}/) || regText.match(/[A-Z]{1,2}-[A-Z0-9]{3,5}/);
+                const regMatch = regText.match(/[A-Z]-[A-Z]{4}/);
                 const registration = regMatch ? regMatch[0].toUpperCase() : '';
 
                 const depDest = fmsText.match(/([A-Z]{4})\s*\/\s*([A-Z]{4})/);
