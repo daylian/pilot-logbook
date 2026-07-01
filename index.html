@@ -162,7 +162,7 @@
 
     // --- Photo capture helpers (grayscale + threshold + crop, all client-side) ---
     const GUIDE_BOXES = {
-        registration: { xPct: 0.05, yPct: 0.25, wPct: 0.90, hPct: 0.45 },
+        registration: { xPct: 0.08, yPct: 0.35, wPct: 0.84, hPct: 0.28 },
         fms:          { xPct: 0.05, yPct: 0.20, wPct: 0.90, hPct: 0.60 }
     };
 
@@ -494,8 +494,11 @@
                 const regText = regOcr.data.text || '';
                 const fmsText = fmsOcr.data.text || '';
 
+                // Primary: dedicated registration crop
+                // Fallback: FMS frame — reg plate is almost always visible top-left
                 const regMatch = regText.match(/[A-Z]-[A-Z]{4}/);
-                const registration = regMatch ? regMatch[0].toUpperCase() : '';
+                const fmsRegMatch = fmsText.match(/[A-Z]-[A-Z]{4}/);
+                const registration = (regMatch ? regMatch[0] : (fmsRegMatch ? fmsRegMatch[0] : '')).toUpperCase();
 
                 const depDest = fmsText.match(/([A-Z]{4})\s*\/\s*([A-Z]{4})/);
                 const outMatch = fmsText.match(/OUT[\/\s]*FUEL[\s\S]{0,15}?(\d{2}:\d{2})/i);
