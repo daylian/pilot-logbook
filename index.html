@@ -197,10 +197,20 @@
         const ctx = canvas.getContext('2d');
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const data = imageData.data;
+
+        // Auto-brightness: find the brightest pixel and scale up if image is dark.
+        // This handles night cockpit shots where panel lighting is the only source.
+        let maxGray = 0;
         for (let i = 0; i < data.length; i += 4) {
-            const gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+            const g = data[i] * 0.299 + data[i+1] * 0.587 + data[i+2] * 0.114;
+            if (g > maxGray) maxGray = g;
+        }
+        const brightnessScale = maxGray > 10 ? (255 / maxGray) : 1;
+
+        for (let i = 0; i < data.length; i += 4) {
+            const gray = (data[i] * 0.299 + data[i+1] * 0.587 + data[i+2] * 0.114) * brightnessScale;
             const val = gray > threshold ? 255 : 0;
-            data[i] = data[i + 1] = data[i + 2] = val;
+            data[i] = data[i+1] = data[i+2] = val;
         }
         ctx.putImageData(imageData, 0, 0);
         return canvas;
@@ -660,25 +670,72 @@
                 // DEP/DEST: four letters slash four letters
                 const depDest = fmsText.match(/([A-Z]{4})\s*\/\s*([A-Z]{4})/);
 
-                // Time regex: anchored on HH:MM followed by slash + optional space
-                // + fuel quantity in ANY format: 009.6, 24.6, 7.1, 24.5 etc.
-                // Fuel format varies — sometimes leading zeros (009.6), sometimes not (24.6).
-                // Space after slash also varies: "00:33/025.1" vs "05:16/ 24.6"
-                const TIME_FUEL = /(\d{2}:\d{2})\/\s*\d+\.?\d*/;
-                const outMatch = fmsText.match(new RegExp('OUT[\\s\\S]{0,30}?' + TIME_FUEL.source, 'i'));
-                const offMatch = fmsText.match(new RegExp('OFF[\\s\\S]{0,30}?' + TIME_FUEL.source, 'i'));
-                const onMatch  = fmsText.match(new RegExp('\\bON[\\s\\S]{0,30}?'  + TIME_FUEL.source, 'i'));
-                const inMatch  = fmsText.match(new RegExp('\\bIN[\\s\\S]{0,30}?'  + TIME_FUEL.source, 'i'));
+                // Time extraction — column-position approach.
+                //
+                // The ACARS layout puts OUT and OFF on the SAME data line:
+                //   OUT/FUEL        OFF/FUEL          <- header line
+                //   00:33/025.1     00:46/024.7       <- data line (left=OUT, right=OFF)
+                //   IN/FUEL         ON/FUEL           <- header line
+                //   **:**/*****     **:**/*****       <- data line (left=IN, right=ON)
+                //
+                // Keyword-proximity search always grabs the wrong column because both
+                // times appear after the same header keyword region.
+                //
+                // Strategy: split OCR text into lines, find lines that contain exactly
+                // two HH:MM/fuel patterns — the left one is col-A, right one is col-B.
+                // Then use header lines immediately above to label col-A and col-B.
+                
+                const TIME_FUEL_PAT = /(\d{2}:\d{2})\/\s*\d+\.?\d*/g;
+
+                const lines = fmsText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+                
+                let out = '', off = '', inn = '', on = '';
+
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i];
+                    const matches = [...line.matchAll(TIME_FUEL_PAT)];
+                    
+                    if (matches.length >= 2) {
+                        // Two time/fuel pairs on one line — left col and right col
+                        const leftTime  = matches[0][1];
+                        const rightTime = matches[1][1];
+                        
+                        // Look at header line above to determine which pair this is
+                        const headerAbove = i > 0 ? lines[i-1].toUpperCase() : '';
+                        
+                        if (headerAbove.includes('OUT') && headerAbove.includes('OFF')) {
+                            out = leftTime;
+                            off = rightTime;
+                        } else if (headerAbove.includes('IN') && headerAbove.includes('ON')) {
+                            inn = leftTime;
+                            on  = rightTime;
+                        } else if (headerAbove.includes('BLOCK') && headerAbove.includes('FLIGHT')) {
+                            // BLOCK/FLIGHT line — ignore, not needed
+                        } else {
+                            // No clear header — assign by position if not yet filled
+                            if (!out && !off) { out = leftTime; off = rightTime; }
+                            else if (!inn && !on) { inn = leftTime; on = rightTime; }
+                        }
+                    } else if (matches.length === 1) {
+                        // Single time on a line — use header context
+                        const headerAbove = i > 0 ? lines[i-1].toUpperCase() : '';
+                        const singleTime = matches[0][1];
+                        if (headerAbove.includes('OUT') && !out) out = singleTime;
+                        else if (headerAbove.includes('OFF') && !off) off = singleTime;
+                        else if (headerAbove.includes('IN') && !inn) inn = singleTime;
+                        else if (headerAbove.includes('ON') && !on) on = singleTime;
+                    }
+                }
 
                 const result = {
                     registration: registration,
                     tailNumber: '',
                     from: depDest ? depDest[1] : '',
                     to: depDest ? depDest[2] : '',
-                    out: outMatch ? outMatch[1] : '',
-                    off: offMatch ? offMatch[1] : '',
-                    on: onMatch ? onMatch[1] : '',
-                    in: inMatch ? inMatch[1] : ''
+                    out: out,
+                    off: off,
+                    on: on,
+                    in: inn
                 };
 
                 if (registration) {
