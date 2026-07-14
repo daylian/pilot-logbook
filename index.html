@@ -166,6 +166,19 @@
         fms:          { xPct: 0.05, yPct: 0.20, wPct: 0.90, hPct: 0.60 }
     };
 
+    // Crop a subregion from an existing canvas (used for FMS top-left reg pass)
+    const cropCanvasRegion = (sourceCanvas, xPct, yPct, wPct, hPct) => {
+        const x = Math.floor(sourceCanvas.width  * xPct);
+        const y = Math.floor(sourceCanvas.height * yPct);
+        const w = Math.floor(sourceCanvas.width  * wPct);
+        const h = Math.floor(sourceCanvas.height * hPct);
+        const out = document.createElement('canvas');
+        out.width  = w;
+        out.height = h;
+        out.getContext('2d').drawImage(sourceCanvas, x, y, w, h, 0, 0, w, h);
+        return out;
+    };
+
     const cropCanvasFromVideo = (video, box) => {
         const vw = video.videoWidth;
         const vh = video.videoHeight;
@@ -274,14 +287,137 @@
             return diff.toFixed(1);
         };
 
-        const calculateDayNight = (offTime, onTime, airTime) => {
-            if (!offTime || !onTime || !airTime) return { day: '', night: '' };
-            const takeoffHour = parseInt(offTime.split(':')[0]);
-            if (takeoffHour >= 6 && takeoffHour < 18) {
-                return { day: airTime, night: '' };
-            } else {
-                return { day: '', night: airTime };
+        // ── SunCalc: sunrise/sunset for a given date + lat/lon ──────────────
+        // Embedded algorithm (no CDN needed — works fully offline).
+        // Based on NOAA solar calculation formulas.
+        const getSunTimes = (date, lat, lon) => {
+            const rad = Math.PI / 180;
+            const J1970 = 2440588, J2000 = 2451545;
+            const toJulian = d => d / 86400000 + J1970 - 0.5;
+            const toDays = d => toJulian(d) - J2000;
+
+            const e = rad * 23.4397; // obliquity of Earth
+            const rightAscension = (l, b) => Math.atan2(Math.sin(l) * Math.cos(e) - Math.tan(b) * Math.sin(e), Math.cos(l));
+            const declination = (l, b) => Math.asin(Math.sin(b) * Math.cos(e) + Math.cos(b) * Math.sin(e) * Math.sin(l));
+            const azimuth = (H, phi, dec) => Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(phi * rad) - Math.tan(dec) * Math.cos(phi * rad));
+            const altitude = (H, phi, dec) => Math.asin(Math.sin(phi * rad) * Math.sin(dec) + Math.cos(phi * rad) * Math.cos(dec) * Math.cos(H));
+            const siderealTime = (d, lw) => rad * (280.16 + 360.9856235 * d) - lw;
+            const solarMeanAnomaly = d => rad * (357.5291 + 0.98560028 * d);
+            const eclipticLongitude = M => {
+                const C = rad * (1.9148 * Math.sin(M) + 0.0200 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M));
+                const P = rad * 102.9372;
+                return M + C + P + Math.PI;
+            };
+            const sunCoords = d => {
+                const M = solarMeanAnomaly(d);
+                const L = eclipticLongitude(M);
+                return { dec: declination(L, 0), ra: rightAscension(L, 0) };
+            };
+            const julianCycle = (d, lw) => Math.round(d - 0.0009 - lw / (2 * Math.PI));
+            const approxTransit = (Ht, lw, n) => 0.0009 + (Ht + lw) / (2 * Math.PI) + n;
+            const solarTransitJ = (ds, M, L) => J2000 + ds + 0.0053 * Math.sin(M) - 0.0069 * Math.sin(2 * L);
+            const hourAngle = (h, phi, d) => Math.acos((Math.sin(h) - Math.sin(phi * rad) * Math.sin(d)) / (Math.cos(phi * rad) * Math.cos(d)));
+            const observerAngle = -0.833; // degrees, accounts for refraction + solar disc
+
+            const lw = rad * -lon;
+            const d = toDays(date.getTime());
+            const n = julianCycle(d, lw);
+            const ds = approxTransit(0, lw, n);
+            const M = solarMeanAnomaly(ds);
+            const L = eclipticLongitude(M);
+            const dec = declination(L, 0);
+            const Jnoon = solarTransitJ(ds, M, L);
+
+            const h0 = (observerAngle) * rad;
+            let Jset, Jrise;
+            try {
+                const w0 = hourAngle(h0, lat, dec);
+                const ds0 = approxTransit(w0, lw, n);
+                Jset = solarTransitJ(ds0, M, L);
+                Jrise = Jnoon - (Jset - Jnoon);
+            } catch(e) {
+                // Polar day/night — sun never sets or rises
+                return { sunrise: null, sunset: null };
             }
+
+            const fromJulian = j => new Date((j + 0.5 - J1970) * 86400000);
+            return { sunrise: fromJulian(Jrise), sunset: fromJulian(Jset) };
+        };
+
+        // ICAO airport coordinates (common Canadian/US/Euro ports)
+        const AIRPORT_COORDS = {
+            CYVR: [49.1947, -123.1792], CYYZ: [43.6772, -79.6306], CYUL: [45.4706, -73.7408],
+            CYOW: [45.3225, -75.6692], CYYC: [51.1139, -114.0200], CYEG: [53.3097, -113.5797],
+            CYHZ: [44.8808, -63.5086], CYYJ: [48.6469, -123.4258], CYHM: [43.1736, -79.9350],
+            CYQT: [48.3719, -89.3239], CYXS: [53.8894, -122.6797], CYXJ: [56.2369, -120.7400],
+            CYXX: [49.0253, -122.3608], CYQR: [50.4319, -104.6658], CYWG: [49.9100, -97.2397],
+            KMCO: [28.4294, -81.3089], KLAS: [36.0840, -115.1537], KJFK: [40.6413, -73.7781],
+            KLAX: [33.9425, -118.4081], KSEA: [47.4502, -122.3088], KORD: [41.9742, -87.9073],
+            KDFW: [32.8998, -97.0403], KATL: [33.6407, -84.4277], KDEN: [39.8561, -104.6737],
+            MMPR: [20.6801, -105.2544],
+            LFBD: [44.8283, -0.7156], LFMK: [43.2161, 2.3063], GAAR: [15.5500, -13.5667],
+            PAAQ: [61.5945, -149.0822], PAEN: [60.5731, -151.2453], PANC: [61.1744, -149.9964],
+            PAFA: [64.8151, -147.8561], PAKN: [58.6768, -156.6492], PAMC: [62.9530, -155.6063],
+            PABE: [60.7787, -161.8380],
+            CYHU: [45.5175, -73.4161], CYYT: [47.6186, -52.7519],
+            CYHM: [43.1736, -79.9350], CYQB: [46.7911, -71.3933],
+            CYZF: [62.4628, -114.4400], CYXE: [52.1708, -106.6997],
+            CYLW: [49.9561, -119.3778], CYVK: [50.1456, -122.9583],
+            MMTJ: [32.5411, -116.9700], KPHX: [33.4373, -112.0078],
+            KSFO: [37.6213, -122.3790], KIAH: [29.9902, -95.3368],
+            KMIA: [25.7959, -80.2870],  KJAX: [30.4941, -81.6879],
+        };
+
+        // Calculate day/night split properly using actual sunrise/sunset
+        // for the departure airport on the flight date.
+        const calculateDayNight = (offTime, onTime, airTime, flightDate, fromIcao) => {
+            if (!offTime || !onTime || !airTime) return { day: '', night: '' };
+
+            const coords = fromIcao ? AIRPORT_COORDS[fromIcao.toUpperCase()] : null;
+
+            // Fallback if airport unknown: use UTC 06-18 heuristic
+            if (!coords || !flightDate) {
+                const takeoffHour = parseInt(offTime.split(':')[0]);
+                if (takeoffHour >= 6 && takeoffHour < 18) {
+                    return { day: airTime, night: '' };
+                } else {
+                    return { day: '', night: airTime };
+                }
+            }
+
+            const [lat, lon] = coords;
+            const dateObj = new Date(flightDate + 'T00:00:00Z');
+            const { sunrise, sunset } = getSunTimes(dateObj, lat, lon);
+
+            if (!sunrise || !sunset) {
+                // Polar conditions — assign all to day (conservative)
+                return { day: airTime, night: '' };
+            }
+
+            // Convert OFF and ON to Date objects on the flight date
+            // Handle overnight: if ON < OFF, ON is next day
+            const [offH, offM] = offTime.split(':').map(Number);
+            const [onH, onM] = onTime.split(':').map(Number);
+            let offDate = new Date(flightDate + 'T' + offTime + ':00Z');
+            let onDate  = new Date(flightDate + 'T' + onTime  + ':00Z');
+            if (onDate <= offDate) onDate = new Date(onDate.getTime() + 86400000);
+
+            const totalMs = onDate - offDate;
+            if (totalMs <= 0) return { day: airTime, night: '' };
+
+            // Clamp sunrise/sunset to the flight window and calculate overlap
+            const dayStart = Math.max(offDate.getTime(), sunrise.getTime());
+            const dayEnd   = Math.min(onDate.getTime(),  sunset.getTime());
+            const dayMs    = Math.max(0, dayEnd - dayStart);
+            const nightMs  = totalMs - dayMs;
+
+            const dayHrs   = (dayMs   / 3600000).toFixed(1);
+            const nightHrs = (nightMs / 3600000).toFixed(1);
+
+            return {
+                day:   parseFloat(dayHrs)   > 0 ? dayHrs   : '',
+                night: parseFloat(nightHrs) > 0 ? nightHrs : ''
+            };
         };
 
         // FIXED: PIC and Day/Night now always recalculate from OUT/IN and OFF/ON
@@ -299,7 +435,13 @@
             }
             if (currentFlight.off && currentFlight.on) {
                 const airTime = calculateTimeDiff(currentFlight.off, currentFlight.on);
-                const dayNight = calculateDayNight(currentFlight.off, currentFlight.on, airTime);
+                const dayNight = calculateDayNight(
+                    currentFlight.off,
+                    currentFlight.on,
+                    airTime,
+                    currentFlight.date,
+                    currentFlight.from
+                );
                 setCurrentFlight(p => ({
                     ...p,
                     airTime: airTime,
@@ -307,7 +449,7 @@
                     night: dayNight.night
                 }));
             }
-        }, [currentFlight.out, currentFlight.in, currentFlight.off, currentFlight.on, useLocalTime]);
+        }, [currentFlight.out, currentFlight.in, currentFlight.off, currentFlight.on, currentFlight.date, currentFlight.from, useLocalTime]);
 
         const handleAircraftChange = (value) => {
             const aircraftInfo = lookupAircraft(value);
@@ -486,25 +628,47 @@
 
         const runOcrPipeline = async (regCanvas, fmsCanvas) => {
             try {
-                const [regOcr, fmsOcr] = await Promise.all([
+                // Run registration and FMS OCR in parallel.
+                // Also crop the top-left corner of the FMS frame specifically
+                // for a second registration pass — the badge is always visible there.
+                const fmsTopLeft = cropCanvasRegion(fmsCanvas, 0, 0, 0.45, 0.18);
+                preprocessCanvas(fmsTopLeft, 128);
+
+                const [regOcr, fmsOcr, fmsTopOcr] = await Promise.all([
                     Tesseract.recognize(regCanvas, 'eng'),
-                    Tesseract.recognize(fmsCanvas, 'eng')
+                    Tesseract.recognize(fmsCanvas, 'eng'),
+                    Tesseract.recognize(fmsTopLeft, 'eng')
                 ]);
 
-                const regText = regOcr.data.text || '';
-                const fmsText = fmsOcr.data.text || '';
+                const regText    = regOcr.data.text    || '';
+                const fmsText    = fmsOcr.data.text    || '';
+                const fmsTopText = fmsTopOcr.data.text || '';
 
-                // Primary: dedicated registration crop
-                // Fallback: FMS frame — reg plate is almost always visible top-left
-                const regMatch = regText.match(/[A-Z]-[A-Z]{4}/);
-                const fmsRegMatch = fmsText.match(/[A-Z]-[A-Z]{4}/);
-                const registration = (regMatch ? regMatch[0] : (fmsRegMatch ? fmsRegMatch[0] : '')).toUpperCase();
+                // Registration: try dedicated crop first, then FMS top-left crop,
+                // then full FMS text as last resort.
+                // Pattern: letter, dash, four letters (e.g. C-GKXK)
+                const REG_PAT = /[A-Z]-[A-Z]{4}/;
+                const regMatch    = regText.match(REG_PAT);
+                const fmsTopMatch = fmsTopText.match(REG_PAT);
+                const fmsMatch    = fmsText.match(REG_PAT);
+                const registration = (
+                    regMatch    ? regMatch[0]    :
+                    fmsTopMatch ? fmsTopMatch[0] :
+                    fmsMatch    ? fmsMatch[0]    : ''
+                ).toUpperCase();
 
+                // DEP/DEST: four letters slash four letters
                 const depDest = fmsText.match(/([A-Z]{4})\s*\/\s*([A-Z]{4})/);
-                const outMatch = fmsText.match(/OUT[\/\s]*FUEL[\s\S]{0,15}?(\d{2}:\d{2})/i);
-                const offMatch = fmsText.match(/OFF[\/\s]*FUEL[\s\S]{0,15}?(\d{2}:\d{2})/i);
-                const onMatch = fmsText.match(/\bON[\/\s]*FUEL[\s\S]{0,15}?(\d{2}:\d{2})/i);
-                const inMatch = fmsText.match(/\bIN[\/\s]*FUEL[\s\S]{0,15}?(\d{2}:\d{2})/i);
+
+                // Time regex: anchored on HH:MM followed by slash + optional space
+                // + fuel quantity in ANY format: 009.6, 24.6, 7.1, 24.5 etc.
+                // Fuel format varies — sometimes leading zeros (009.6), sometimes not (24.6).
+                // Space after slash also varies: "00:33/025.1" vs "05:16/ 24.6"
+                const TIME_FUEL = /(\d{2}:\d{2})\/\s*\d+\.?\d*/;
+                const outMatch = fmsText.match(new RegExp('OUT[\\s\\S]{0,30}?' + TIME_FUEL.source, 'i'));
+                const offMatch = fmsText.match(new RegExp('OFF[\\s\\S]{0,30}?' + TIME_FUEL.source, 'i'));
+                const onMatch  = fmsText.match(new RegExp('\\bON[\\s\\S]{0,30}?'  + TIME_FUEL.source, 'i'));
+                const inMatch  = fmsText.match(new RegExp('\\bIN[\\s\\S]{0,30}?'  + TIME_FUEL.source, 'i'));
 
                 const result = {
                     registration: registration,
