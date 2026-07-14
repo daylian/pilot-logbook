@@ -717,17 +717,38 @@
                 
                 let out = '', off = '', inn = '', on = '';
 
+                // Helper: fix common Tesseract OCR digit confusions in times.
+                // In low-light cockpit shots, '0' is frequently read as '2' or '8',
+                // and '6' as '8'. We correct by cross-referencing the paired time:
+                // OUT and OFF appear on the same line — if one looks wrong relative
+                // to the other, try substituting the first digit.
+                const fixOcrTime = (t) => {
+                    if (!t) return t;
+                    // Times on this aircraft are always UTC, valid range 00-23
+                    const [h, m] = t.split(':').map(Number);
+                    if (h > 23) {
+                        // First digit is likely a misread — try '0' substitution
+                        const fixed = '0' + t[1] + ':' + t.slice(3);
+                        const [fh] = fixed.split(':').map(Number);
+                        if (fh <= 23) return fixed;
+                    }
+                    return t;
+                };
+
                 for (let i = 0; i < lines.length; i++) {
                     const line = lines[i];
                     const matches = [...line.matchAll(TIME_FUEL_PAT)];
                     
                     if (matches.length >= 2) {
                         // Two time/fuel pairs on one line — left col and right col
-                        const leftTime  = matches[0][1];
-                        const rightTime = matches[1][1];
+                        const leftTime  = fixOcrTime(matches[0][1]);
+                        const rightTime = fixOcrTime(matches[1][1]);
                         
-                        // Look at header line above to determine which pair this is
-                        const headerAbove = i > 0 ? lines[i-1].toUpperCase() : '';
+                        // Look at header line above to determine which pair this is.
+                        // Also check two lines above in case OCR merged a blank line.
+                        const h1 = i > 0 ? lines[i-1].toUpperCase() : '';
+                        const h2 = i > 1 ? lines[i-2].toUpperCase() : '';
+                        const headerAbove = h1 + ' ' + h2;
                         
                         if (headerAbove.includes('OUT') && headerAbove.includes('OFF')) {
                             out = leftTime;
@@ -735,17 +756,18 @@
                         } else if (headerAbove.includes('IN') && headerAbove.includes('ON')) {
                             inn = leftTime;
                             on  = rightTime;
-                        } else if (headerAbove.includes('BLOCK') && headerAbove.includes('FLIGHT')) {
-                            // BLOCK/FLIGHT line — ignore, not needed
+                        } else if (headerAbove.includes('BLOCK') || headerAbove.includes('FLIGHT')) {
+                            // BLOCK/FLIGHT line — ignore
                         } else {
-                            // No clear header — assign by position if not yet filled
+                            // No clear header — fill in order
                             if (!out && !off) { out = leftTime; off = rightTime; }
                             else if (!inn && !on) { inn = leftTime; on = rightTime; }
                         }
                     } else if (matches.length === 1) {
-                        // Single time on a line — use header context
-                        const headerAbove = i > 0 ? lines[i-1].toUpperCase() : '';
-                        const singleTime = matches[0][1];
+                        const h1 = i > 0 ? lines[i-1].toUpperCase() : '';
+                        const h2 = i > 1 ? lines[i-2].toUpperCase() : '';
+                        const headerAbove = h1 + ' ' + h2;
+                        const singleTime = fixOcrTime(matches[0][1]);
                         if (headerAbove.includes('OUT') && !out) out = singleTime;
                         else if (headerAbove.includes('OFF') && !off) off = singleTime;
                         else if (headerAbove.includes('IN') && !inn) inn = singleTime;
