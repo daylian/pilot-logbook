@@ -1,4 +1,4 @@
-const CACHE_NAME = ‘pilot-logbook-v8’;
+const CACHE_NAME = ‘pilot-logbook-v9’;
 
 const ASSETS_TO_CACHE = [
 ‘./’,
