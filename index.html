@@ -193,6 +193,29 @@
         return cropped;
     };
 
+    // Invert version: brightness-normalize then invert then threshold.
+    // Used for registration badge — letters are lighter than dark background,
+    // so invert produces black text on white which Tesseract reads best.
+    const preprocessCanvasInvert = (canvas, threshold = 128) => {
+        const ctx = canvas.getContext('2d');
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const data = imageData.data;
+        let maxGray = 0;
+        for (let i = 0; i < data.length; i += 4) {
+            const g = data[i] * 0.299 + data[i+1] * 0.587 + data[i+2] * 0.114;
+            if (g > maxGray) maxGray = g;
+        }
+        const scale = maxGray > 10 ? (255 / maxGray) : 1;
+        for (let i = 0; i < data.length; i += 4) {
+            const gray = (data[i] * 0.299 + data[i+1] * 0.587 + data[i+2] * 0.114) * scale;
+            // Invert: bright pixels (letters) become dark, dark background becomes white
+            const val = gray > threshold ? 0 : 255;
+            data[i] = data[i+1] = data[i+2] = val;
+        }
+        ctx.putImageData(imageData, 0, 0);
+        return canvas;
+    };
+
     const preprocessCanvas = (canvas, threshold = 140) => {
         const ctx = canvas.getContext('2d');
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -619,7 +642,10 @@
 
             if (captureStep === 'registration') {
                 const cropped = cropCanvasFromVideo(videoRef.current, GUIDE_BOXES.registration);
-                preprocessCanvas(cropped, 128);
+                // Auto-brightness + invert before threshold.
+                // The badge letters are lighter than background even in low light.
+                // Inversion makes them dark-on-light which Tesseract reads reliably.
+                preprocessCanvasInvert(cropped, 128);
                 setCapturedRegCanvas(cropped);
                 setCaptureStep('fms');
                 return;
@@ -727,15 +753,24 @@
                     }
                 }
 
+                // Validate: ensure extracted times actually appear in raw FMS text.
+                // Guards against OCR misreads from keyboard/bezel characters
+                // being assembled into plausible-looking but wrong times.
+                const timeInText = (t) => t && fmsText.includes(t);
+                const safeOut = timeInText(out) ? out : '';
+                const safeOff = timeInText(off) ? off : '';
+                const safeOn  = timeInText(on)  ? on  : '';
+                const safeIn  = timeInText(inn)  ? inn  : '';
+
                 const result = {
                     registration: registration,
                     tailNumber: '',
                     from: depDest ? depDest[1] : '',
                     to: depDest ? depDest[2] : '',
-                    out: out,
-                    off: off,
-                    on: on,
-                    in: inn
+                    out: safeOut,
+                    off: safeOff,
+                    on: safeOn,
+                    in: safeIn
                 };
 
                 if (registration) {
